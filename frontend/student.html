@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Student – Course Registration</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top"><strong>Course Registration</strong>
+    <span>Signed in as <b id="who"></b> <button class="ghost small" onclick="logout()">Log out</button></span></header>
+  <main>
+    <section class="card">
+      <h2>Available courses</h2>
+      <div id="courses"></div>
+    </section>
+
+    <section class="card" id="formCard" hidden>
+      <h2>Registration form: <span id="chosen"></span></h2>
+      <form id="regForm" class="form">
+        <div class="grid2">
+          <div><label for="phone">Phone number</label><input id="phone" required pattern="[0-9+ \-]{7,15}" title="7–15 digits"></div>
+          <div><label for="qual">Highest qualification</label>
+            <select id="qual" required>
+              <option value="">Select…</option><option>High school</option><option>Diploma</option>
+              <option>Bachelor's degree</option><option>Master's degree</option><option>Other</option>
+            </select></div>
+        </div>
+        <button type="submit">Register for this course</button>
+        <div class="msg" id="msg" role="alert"></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>My registrations</h2>
+      <div class="table-wrap"><table><thead><tr><th>Course</th><th>Instructor</th><th>Date</th><th></th></tr></thead>
+        <tbody id="mine"></tbody></table></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+  <script>
+    if (guard('student')) { load(); }
+    let selected = null;
+
+    async function load() {
+      const [courses, mine] = await Promise.all([api('/courses'), api('/my-registrations')]);
+      const taken = new Set(mine.map((m) => m.title));
+      $('#courses').innerHTML = courses.map((c) => `
+        <div class="course"><div><h3>${esc(c.title)}</h3><p>${esc(c.description)}</p>
+          <p>${esc(c.instructor)} · <span class="badge">${c.seats_left} seats left</span></p></div>
+          ${taken.has(c.title) ? '<span class="badge">Registered</span>'
+            : c.seats_left <= 0 ? '<span>Full</span>'
+            : `<button data-id="${c.id}" data-title="${esc(c.title)}">Select</button>`}</div>`).join('')
+        || '<p>No courses are open yet.</p>';
+      $('#mine').innerHTML = mine.map((m) => `<tr><td>${esc(m.title)}</td><td>${esc(m.instructor)}</td>
+        <td>${fmt(m.registered_at)}</td><td><button class="danger small" data-drop="${m.id}">Drop</button></td></tr>`).join('')
+        || '<tr><td colspan="4">You have not registered for any course.</td></tr>';
+    }
+
+    document.addEventListener('click', async (e) => {
+      if (e.target.dataset.id) {
+        selected = e.target.dataset.id;
+        $('#chosen').textContent = e.target.dataset.title;
+        $('#formCard').hidden = false; $('#msg').textContent = '';
+        $('#formCard').scrollIntoView({ behavior: 'smooth' });
+      }
+      if (e.target.dataset.drop && confirm('Drop this course?')) {
+        await api('/my-registrations/' + e.target.dataset.drop, 'DELETE'); load();
+      }
+    });
+
+    $('#regForm').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('/register', 'POST', { course_id: selected, phone: $('#phone').value, qualification: $('#qual').value });
+        say($('#msg'), 'You are registered.', true); e.target.reset(); $('#formCard').hidden = true; load();
+      } catch (err) { say($('#msg'), err.message); }
+    };
+  </script>
+</body>
+</html>

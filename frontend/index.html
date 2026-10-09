@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Course Registration – Sign in</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="auth">
+    <h1>Course Registration</h1>
+    <p class="sub">Sign in to browse courses and register.</p>
+    <div class="card">
+      <div class="tabs">
+        <button id="tLogin" class="on" type="button">Log in</button>
+        <button id="tSignup" type="button">Create student account</button>
+      </div>
+      <form id="form" class="form">
+        <div id="nameBox" hidden><label for="name">Full name</label><input id="name" autocomplete="name"></div>
+        <label for="email">Email</label><input id="email" type="email" required autocomplete="email">
+        <label for="password">Password</label><input id="password" type="password" required minlength="6" autocomplete="current-password">
+        <button type="submit" id="go">Log in</button>
+        <div class="msg" id="msg" role="alert"></div>
+      </form>
+    </div>
+    <p class="sub" style="margin-top:1rem">Admins use the same form with their admin email.</p>
+  </div>
+  <script src="app.js"></script>
+  <script>
+    let signup = false;
+    function mode(s) {
+      signup = s;
+      $('#tLogin').classList.toggle('on', !s); $('#tSignup').classList.toggle('on', s);
+      $('#nameBox').hidden = !s; $('#go').textContent = s ? 'Create account' : 'Log in'; $('#msg').textContent = '';
+    }
+    $('#tLogin').onclick = () => mode(false);
+    $('#tSignup').onclick = () => mode(true);
+    $('#form').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const body = { email: $('#email').value, password: $('#password').value };
+        if (signup) body.name = $('#name').value;
+        const d = await api(signup ? '/signup' : '/login', 'POST', body);
+        localStorage.token = d.token; localStorage.role = d.role; localStorage.name = d.name;
+        location.href = d.role === 'admin' ? '/admin.html' : '/student.html';
+      } catch (err) { say($('#msg'), err.message); }
+    };
+    if (localStorage.token) location.href = localStorage.role === 'admin' ? '/admin.html' : '/student.html';
+  </script>
+</body>
+</html>

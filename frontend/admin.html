@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin – Course Registration</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top"><strong>Admin dashboard</strong>
+    <span><b id="who"></b> <button class="ghost small" onclick="logout()">Log out</button></span></header>
+  <main>
+    <section class="card">
+      <h2>Students</h2>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Registered courses</th><th></th></tr></thead>
+        <tbody id="students"></tbody></table></div>
+    </section>
+
+    <section class="card" id="regCard">
+      <h2>Register a student for a course</h2>
+      <form id="regForm" class="form">
+        <div class="grid2">
+          <div><label for="stu">Student</label><select id="stu" required></select></div>
+          <div><label for="crs">Course</label><select id="crs" required></select></div>
+          <div><label for="phone">Phone number</label><input id="phone" required pattern="[0-9+ \-]{7,15}" title="7–15 digits"></div>
+          <div><label for="qual">Highest qualification</label>
+            <select id="qual" required>
+              <option value="">Select…</option><option>High school</option><option>Diploma</option>
+              <option>Bachelor's degree</option><option>Master's degree</option><option>Other</option>
+            </select></div>
+        </div>
+        <button type="submit">Register student</button>
+        <div class="msg" id="regMsg" role="alert"></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>All registrations</h2>
+      <div class="table-wrap"><table><thead><tr><th>Student</th><th>Email</th><th>Phone</th><th>Qualification</th><th>Course</th><th>Date</th><th></th></tr></thead>
+        <tbody id="regs"></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Courses</h2>
+      <div class="table-wrap"><table><thead><tr><th>Title</th><th>Instructor</th><th>Seats left</th><th></th></tr></thead>
+        <tbody id="courses"></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Add a course</h2>
+      <form id="addForm" class="form">
+        <div class="grid2">
+          <div><label for="title">Title</label><input id="title" required></div>
+          <div><label for="instr">Instructor</label><input id="instr"></div>
+          <div><label for="seats">Seats</label><input id="seats" type="number" min="1" value="30"></div>
+          <div><label for="desc">Description</label><input id="desc"></div>
+        </div>
+        <button type="submit">Add course</button>
+        <div class="msg" id="msg" role="alert"></div>
+      </form>
+    </section>
+  </main>
+  <script src="app.js"></script>
+  <script>
+    if (guard('admin')) load();
+
+    async function load() {
+      const [courses, regs, students] = await Promise.all([api('/courses'), api('/registrations'), api('/students')]);
+
+      $('#students').innerHTML = students.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.email)}</td>
+        <td>${s.courses.length ? s.courses.map((c) => esc(c.title)).join(', ') : '<em>None yet</em>'}</td>
+        <td><button class="small" data-pick="${s.id}">Register</button></td></tr>`).join('')
+        || '<tr><td colspan="4">No students have signed up yet.</td></tr>';
+
+      const keep = { stu: $('#stu').value, crs: $('#crs').value };
+      $('#stu').innerHTML = '<option value="">Select student…</option>' +
+        students.map((s) => `<option value="${s.id}">${esc(s.name)} (${esc(s.email)})</option>`).join('');
+      $('#crs').innerHTML = '<option value="">Select course…</option>' +
+        courses.map((c) => `<option value="${c.id}" ${c.seats_left <= 0 ? 'disabled' : ''}>${esc(c.title)} (${c.seats_left} left)</option>`).join('');
+      $('#stu').value = keep.stu; $('#crs').value = keep.crs;
+
+      $('#regs').innerHTML = regs.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.email)}</td><td>${esc(r.phone)}</td>
+        <td>${esc(r.qualification)}</td><td>${esc(r.title)}</td><td>${fmt(r.registered_at)}</td>
+        <td><button class="danger small" data-unreg="${r.id}">Remove</button></td></tr>`).join('')
+        || '<tr><td colspan="7">No registrations yet.</td></tr>';
+
+      $('#courses').innerHTML = courses.map((c) => `<tr><td>${esc(c.title)}</td><td>${esc(c.instructor)}</td>
+        <td>${c.seats_left} / ${c.seats}</td><td><button class="danger small" data-del="${c.id}">Delete</button></td></tr>`).join('')
+        || '<tr><td colspan="4">No courses yet.</td></tr>';
+    }
+
+    document.addEventListener('click', async (e) => {
+      const d = e.target.dataset;
+      if (d.pick) { $('#stu').value = d.pick; $('#regCard').scrollIntoView({ behavior: 'smooth' }); $('#crs').focus(); }
+      if (d.unreg && confirm('Remove this registration?')) { await api('/registrations/' + d.unreg, 'DELETE'); load(); }
+      if (d.del && confirm('Delete this course and its registrations?')) { await api('/courses/' + d.del, 'DELETE'); load(); }
+    });
+
+    $('#regForm').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('/admin/register', 'POST', { user_id: $('#stu').value, course_id: $('#crs').value,
+          phone: $('#phone').value, qualification: $('#qual').value });
+        say($('#regMsg'), 'Student registered.', true); e.target.reset(); load();
+      } catch (err) { say($('#regMsg'), err.message); }
+    };
+
+    $('#addForm').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('/courses', 'POST', { title: $('#title').value, instructor: $('#instr').value,
+          seats: $('#seats').value, description: $('#desc').value });
+        say($('#msg'), 'Course added.', true); e.target.reset(); $('#seats').value = 30; load();
+      } catch (err) { say($('#msg'), err.message); }
+    };
+  </script>
+</body>
+</html>
