@@ -9,6 +9,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const APP_VERSION = process.env.APP_VERSION || 'local';
 
+
 const pool = new Pool({
   host: process.env.DB_HOST || 'db',
   user: process.env.DB_USER,
@@ -36,24 +37,25 @@ const sign = (u) =>
 // ---- public routes ----
 // Readiness check: report unhealthy when PostgreSQL cannot be reached.
 app.get('/api/health', async (_req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    return res.status(200).json({
-      status: 'ok',
-      db: 'up',
-      version: APP_VERSION,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Health check failed:', error.message);
-    return res.status(503).json({
-      status: 'error',
-      db: 'down',
-      version: APP_VERSION,
-      timestamp: new Date().toISOString()
-    });
-  }
+try {
+await pool.query('SELECT 1');
+return res.status(200).json({
+status: 'ok',
+db: 'up',
+version: APP_VERSION,
+timestamp: new Date().toISOString()
 });
+} catch (error) {
+console.error('Health check failed:', error.message);
+return res.status(503).json({
+status: 'error',
+db: 'down',
+version: APP_VERSION,
+timestamp: new Date().toISOString()
+});
+}
+});
+
 
 app.post('/api/signup', async (req, res) => {
   const { name, email, password } = req.body;
@@ -226,15 +228,18 @@ async function seedCourses() {
 }
 
 seedAdmin()
-  .then(seedCourses)
-  .then(() => {
-    const port = Number(process.env.PORT || 3000);
-    app.listen(port, () => console.log(JSON.stringify({
-      level: 'info',
-      message: 'Backend started',
-      port,
-      version: APP_VERSION,
-      timestamp: new Date().toISOString()
-    })));
-  })
-  .catch((e) => { console.error('Startup failed:', e); process.exit(1); });
+.then(seedCourses)
+.then(() => {
+const port = Number(process.env.PORT || 3000);
+app.listen(port, () => console.log(JSON.stringify({
+level: 'info',
+message: 'Backend started',
+port,
+version: APP_VERSION,
+timestamp: new Date().toISOString()
+})));
+})
+.catch((e) => {
+console.error('Startup failed:', e);
+process.exit(1);
+});
