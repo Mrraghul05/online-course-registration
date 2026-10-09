@@ -1,0 +1,160 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and integration smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate backend JavaScript syntax
+        run: node --check backend/server.js
+
+      - name: Prepare test environment
+        run: |
+          cp .env.example .env
+          {
+            echo "DB_PASSWORD=ci_test_password"
+            echo "JWT_SECRET=ci_test_jwt_secret_at_least_32_characters"
+            echo "ADMIN_PASSWORD=ci_test_admin_password"
+            echo "APP_VERSION=${GITHUB_SHA}"
+          } >> .env
+
+      - name: Build and start application
+        run: docker compose up -d --build
+
+      - name: Wait for database-aware health endpoint
+        shell: bash
+        run: |
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent http://localhost:8080/api/health > health.json; then
+              cat health.json
+              node -e "const h=require('./health.json'); if(h.status!=='ok'||h.db!=='up') process.exit(1)"
+              exit 0
+            fi
+            sleep 3
+          done
+          docker compose ps
+          docker compose logs --no-color
+          exit 1
+
+      - name: Check frontend response
+        run: curl --fail --silent --show-error http://localhost:8080/ > /dev/null
+
+      - name: Show service status
+        if: always()
+        run: docker compose ps
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v
+
+  publish:
+    name: Build and publish images to GHCR
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase image owner
+        id: image
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ steps.image.outputs.owner }}/course-registration-backend:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.owner }}/course-registration-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image.outputs.owner }}/course-registration-frontend:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.owner }}/course-registration-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    name: Optional Render deployment and verification
+    needs: publish
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger configured Render deploy hooks
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+          BACKEND_HOOK: ${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}
+          FRONTEND_HOOK: ${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}
+        shell: bash
+        run: |
+          OWNER_LOWER=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          if [[ -z "$BACKEND_HOOK" && -z "$FRONTEND_HOOK" ]]; then
+            echo "Render hooks are not configured; images were published to GHCR. Skipping cloud deployment."
+            exit 0
+          fi
+          [[ -n "$BACKEND_HOOK" ]] && curl --fail --silent --show-error "$BACKEND_HOOK?imgURL=ghcr.io/$OWNER_LOWER/course-registration-backend:$SHA"
+          [[ -n "$FRONTEND_HOOK" ]] && curl --fail --silent --show-error "$FRONTEND_HOOK?imgURL=ghcr.io/$OWNER_LOWER/course-registration-frontend:$SHA"
+
+      - name: Verify configured production endpoints
+        if: vars.PRODUCTION_API_URL != '' || vars.PRODUCTION_FRONTEND_URL != ''
+        env:
+          API_URL: ${{ vars.PRODUCTION_API_URL }}
+          FRONTEND_URL: ${{ vars.PRODUCTION_FRONTEND_URL }}
+          EXPECTED_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if [[ -n "$API_URL" ]]; then
+            ok=0
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error "$API_URL/api/health" -o health.json; then
+                cat health.json
+                if node -e "const h=require('./health.json'); process.exit(h.status==='ok' && h.db==='up' && h.version==='${EXPECTED_SHA}' ? 0 : 1)"; then
+                  ok=1; break
+                fi
+              fi
+              sleep 5
+            done
+            [[ "$ok" == "1" ]] || { echo "API health/version verification failed"; exit 1; }
+          fi
+          if [[ -n "$FRONTEND_URL" ]]; then
+            curl --fail --location --silent --show-error "$FRONTEND_URL/" -o /dev/null
+          fi
